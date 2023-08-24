@@ -3,12 +3,14 @@ from flask import Flask, g, request, jsonify
 from flask_compress import Compress
 from flask_cors import CORS
 import firebase_admin
+from google.cloud.firestore_v1.base_query import FieldFilter
 from firebase_admin import credentials
 from firebase_admin import firestore
 from utilities import time_utils
 from utilities import target_utils
 import datetime
 import pytz
+import re
 
 # Use a service account.
 cred = credentials.Certificate('astroplanner-25d27-firebase-adminsdk-tv1sf-3516a4d7d5.json')
@@ -134,19 +136,40 @@ def create_app():
         }
         return jsonify(response), 200
 
-    @app.route('/search_objects', methods=['GET'])
-    def search_objects():
-        query = request.args.get('query', '').strip()
+    # @app.route('/search_objects', methods=['GET'])
+    # def search_objects():
+    #     query = request.args.get('query', '').strip()
 
-        astro_objects_ref = g.db.collection("astro_objects")
+    #     astro_objects_ref = g.db.collection("astro_objects")
 
-        # The field and value you're querying for
-        field_name = 'primary_identifier'
+    #     # The field and value you're querying for
+    #     field_name = 'primary_identifier'
 
-        # Query for documents where the field starts with the given value
-        query_ref = astro_objects_ref.order_by(field_name) \
-                                .start_at({field_name: query}) \
-                                .end_at({field_name: query + '\uf8ff'})
+    #     # Query for documents where the field starts with the given value
+    #     query_ref = astro_objects_ref.order_by(field_name) \
+    #                             .start_at({field_name: query}) \
+    #                             .end_at({field_name: query + '\uf8ff'})
+
+    #     # Execute the query and print the results
+    #     astro_objects = query_ref.stream()
+
+    #     suggestions = []
+
+    #     for obj in astro_objects:
+    #         obj_dict = obj.to_dict()
+    #         suggestions.append(
+    #             {
+    #                 "id": obj_dict["id"],
+    #                 "primary_identifier": obj_dict["primary_identifier"],
+    #                 "display_name": f'{obj_dict["primary_identifier"]} - {obj_dict["object_name"]}' if obj_dict["object_name"] else obj_dict["primary_identifier"]
+    #             }
+    #         )
+    #     return jsonify(suggestions)
+
+    def query_objects_by_id(field_name, field_value):
+        astro_objects_ref = g.db.collection("astro_objects_full")
+
+        query_ref = astro_objects_ref.where(filter=FieldFilter(field_name, "==", field_value))
 
         # Execute the query and print the results
         astro_objects = query_ref.stream()
@@ -155,13 +178,145 @@ def create_app():
 
         for obj in astro_objects:
             obj_dict = obj.to_dict()
+
+            object_name = obj_dict["object_name"].split(',')[0] if obj_dict["object_name"] else None
             suggestions.append(
                 {
-                    "id": obj_dict["id"],
-                    "primary_identifier": obj_dict["primary_identifier"],
-                    "display_name": f'{obj_dict["primary_identifier"]} - {obj_dict["object_name"]}' if obj_dict["object_name"] else obj_dict["primary_identifier"]
+                    "id": field_value,
+                    "display_name": f'{field_value} - {object_name}' if object_name else field_value
                 }
             )
+        return suggestions
+
+    def query_objects_by_name(name):
+        astro_objects_ref = g.db.collection("astro_objects_full")
+
+        # The field name for object_name
+        field_name = 'object_name'
+
+        # Query for documents where the field starts with the given value
+        query_ref = astro_objects_ref.order_by(field_name) \
+                                .start_at({field_name: name}) \
+                                .end_at({field_name: name + '\uf8ff'})
+
+        # Execute the query and print the results
+        astro_objects = query_ref.stream()
+
+        suggestions = []
+
+        for obj in astro_objects:
+            obj_dict = obj.to_dict()
+
+            object_name = obj_dict["object_name"].split(',')[0] if obj_dict["object_name"] else None
+
+            messier_id = obj_dict["messier_id"]
+            ngc_id = obj_dict["ngc_id"]
+            ic_id = obj_dict["ic_id"]
+
+            id_value = None
+
+            if messier_id:
+                id_value = messier_id
+            elif ngc_id:
+                id_value = ngc_id
+            elif ic_id:
+                id_value = ic_id            
+
+            suggestions.append(
+                {
+                    "id": id_value,
+                    "display_name": f'{id_value} - {object_name}'
+                }
+            )
+        return suggestions
+
+    def query_objects_by_keyword(name):
+        astro_objects_ref = g.db.collection("astro_objects_full")
+
+        # Keyword field names
+        keywords = [
+            'keyword_01',
+            'keyword_02',
+            'keyword_03',
+            'keyword_04',
+            'keyword_05',
+            'keyword_06',
+            'keyword_07'
+        ]
+
+        suggestions = []
+
+        for keyword in keywords:
+            # Query for documents where the field starts with the given value
+            query_ref = astro_objects_ref.order_by(keyword) \
+                                    .start_at({keyword: name.lower()}) \
+                                    .end_at({keyword: name.lower() + '\uf8ff'})
+
+            # Execute the query and print the results
+            astro_objects = query_ref.stream()
+
+            for obj in astro_objects:
+                obj_dict = obj.to_dict()
+
+                object_name = obj_dict["object_name"].split(',')[0] if obj_dict["object_name"] else None
+
+                messier_id = obj_dict["messier_id"]
+                ngc_id = obj_dict["ngc_id"]
+                ic_id = obj_dict["ic_id"]
+
+                id_value = None
+
+                if messier_id:
+                    id_value = messier_id
+                elif ngc_id:
+                    id_value = ngc_id
+                elif ic_id:
+                    id_value = ic_id            
+
+                suggestions.append(
+                    {
+                        "id": id_value,
+                        "display_name": f'{id_value} - {object_name}'
+                    }
+                )
+
+        # suggestions = list(set(suggestions))
+
+        return suggestions
+
+    @app.route('/search_objects', methods=['GET'])
+    def search_objects():
+        query = request.args.get('query', '').strip()
+
+        astro_objects_ref = g.db.collection("astro_objects_full")
+
+        # TODO: Figure out which identifier to use
+        # Identifier format could be IC123, IC-123, IC 123, NGC321, NGC-321, NGC 321, M31, M-31, M 31
+        # If no identifier match, fallback to common name
+
+        identifier_pattern = r'\b(IC|NGC|M)[\s\-]?(\d+)\b'
+
+        matches = re.findall(identifier_pattern, query)
+
+        suggestions = []
+
+        # Check if we have an identifier
+        if matches:
+            prefix = matches[0][0]
+            number = matches[0][1]
+
+            if prefix == "IC":
+                # Query for IC object
+                suggestions = query_objects_by_id("ic_id", f"{prefix}{number}")
+            elif prefix == "NGC":
+                # Query for NGC object
+                suggestions = query_objects_by_id("ngc_id", f"{prefix}{number}")
+            elif prefix == "M":
+                # Query for M object
+                suggestions = query_objects_by_id("messier_id", f"{prefix}{number}")
+        else:
+            suggestions = query_objects_by_keyword(query)
+
         return jsonify(suggestions)
 
     CORS(app)       # Enable CORS for all routes
